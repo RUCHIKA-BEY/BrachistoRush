@@ -1,18 +1,21 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { Box, Pause, Play, RotateCcw, SlidersHorizontal, Square, Undo2 } from "lucide-react";
 import type { RacerId } from "@/lib/physics/types";
 import { useThemeColors } from "@/lib/useThemeColors";
+import { setLabSnapshot } from "@/lib/tutor/bridge";
+import { GRAVITY, RACERS, RACER_ORDER } from "@/lib/racers";
 import { Controls } from "./Controls";
 import { Stepper, StagePanel } from "./Inquiry";
 import { EnergyPanel, Standings } from "./Panels";
 import { RaceCanvas2D, type DisplayOptions } from "./RaceCanvas2D";
 import { SpeedChart } from "./SpeedChart";
 import { TrialLog } from "./TrialLog";
-import { DEFAULT_SETTINGS, useRace } from "./useRace";
+import { DEFAULT_SETTINGS, clampEnd, standings, useRace } from "./useRace";
 
 const RaceView3D = dynamic(() => import("./RaceView3D"), {
   ssr: false,
@@ -29,6 +32,57 @@ export function RaceLab() {
   const [drawMode, setDrawMode] = useState(false);
   const [focus, setFocus] = useState<RacerId>("cycloid");
   const [controlsOpen, setControlsOpen] = useState(false);
+
+  const params = useSearchParams();
+
+  // presets from the URL, e.g. /lab?dx=3.5&dh=0.6&mu=0.2&g=moon&racers=cycloid,straight
+  useEffect(() => {
+    if (!params || params.size === 0) return;
+    const num = (k: string) => {
+      const v = parseFloat(params.get(k) ?? "");
+      return Number.isFinite(v) ? v : undefined;
+    };
+    const patch: Parameters<typeof api.update>[0] = {};
+    const dx = num("dx");
+    const dh = num("dh");
+    if (dx !== undefined || dh !== undefined) Object.assign(patch, clampEnd(dx ?? api.settings.W, dh ?? api.settings.H));
+    const mu = num("mu");
+    if (mu !== undefined) patch.mu = Math.min(0.5, Math.max(0, mu));
+    const g = params.get("g");
+    if (g && GRAVITY.some((p) => p.key === g)) patch.gKey = g;
+    const racers = params.get("racers");
+    if (racers) {
+      const list = racers.split(",").map((r) => r.trim());
+      const enabled = { ...api.settings.enabled };
+      for (const id of RACER_ORDER) if (id !== "custom") enabled[id] = list.includes(id);
+      if (RACER_ORDER.some((id) => enabled[id])) patch.enabled = enabled;
+    }
+    if (Object.keys(patch).length) {
+      api.update(patch);
+      api.setPrediction(null);
+      api.setStage("predict");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
+
+  // tell the tutor what the student is looking at
+  useEffect(() => {
+    const s = api.settings;
+    const planet = GRAVITY.find((p) => p.key === s.gKey)?.label ?? "Earth";
+    const racers = api.geoms.map((g) => `${RACERS[g.id].name} (${g.length.toFixed(2)} m)`).join(", ");
+    let text = `B is ${s.W.toFixed(2)} m across and ${s.H.toFixed(2)} m down; friction mu = ${s.mu.toFixed(2)}; gravity: ${planet}; wobble ${s.noise ? "on" : "off"}. Racers: ${racers}. Inquiry step: ${api.stage}.`;
+    if (api.phase === "finished" && api.race) {
+      const res = standings(api.race)
+        .map((r) => `${RACERS[r.id].name} ${r.time === null ? "did not finish" : r.time.toFixed(3) + " s"}`)
+        .join("; ");
+      text += ` Last race result: ${res}.`;
+      if (api.prediction) text += ` The student predicted: ${RACERS[api.prediction].name}.`;
+    }
+    text += ` Trials recorded: ${api.trials.length}.`;
+    setLabSnapshot(text);
+  }, [api.settings, api.geoms, api.phase, api.race, api.stage, api.prediction, api.trials.length]);
+
+  useEffect(() => () => setLabSnapshot(""), []);
 
   const running = api.phase === "running";
   const canScrub = api.phase === "finished" || api.phase === "paused";

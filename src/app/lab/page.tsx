@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { RaceLab } from "@/components/lab/RaceLab";
 import { SectionHeader, SectionPager } from "@/components/layout/SectionChrome";
 
@@ -13,7 +14,9 @@ export default function LabPage() {
       <SectionHeader slug="lab">
         Predict the winner, race, measure the times, explain the result — then change one thing. Drag <strong className="text-secondary-soft">B</strong> to reshape every path live.
       </SectionHeader>
-      <RaceLab />
+      <Suspense fallback={<div className="card grid h-96 place-items-center text-sm text-muted">Loading the Race Lab…</div>}>
+        <RaceLab />
+      </Suspense>
       <SectionPager slug="lab" />
     </div>
   );

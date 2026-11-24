@@ -1,11 +1,12 @@
 "use client";
 
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowRight, Check, FlaskConical, Hand, Lightbulb, Moon, Pencil, Ruler, Shuffle, Sparkles, Target, Timer, Trophy, Waves, X } from "lucide-react";
+import { ArrowRight, Check, MessageCircleQuestion, FlaskConical, Hand, Lightbulb, Moon, Pencil, Ruler, Shuffle, Sparkles, Target, Timer, Trophy, Waves, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { maxSpeed } from "@/lib/physics/simulate";
 import type { RacerId } from "@/lib/physics/types";
 import { RACERS } from "@/lib/racers";
+import { askTutor } from "@/lib/tutor/bridge";
 import { fmt, raceSummary } from "./Panels";
 import { ShapeIcon } from "./shapes";
 import { racerStateAt, theoryTimes, type RaceApi, type Settings, type Stage } from "./useRace";
@@ -334,6 +335,9 @@ function Explain({ api }: { api: RaceApi }) {
       <div className="mt-4 flex flex-wrap gap-2">
         <button className="btn btn-primary" onClick={() => api.setStage("vary")}>
           Now vary one thing <ArrowRight className="h-4 w-4" />
+        </button>
+        <button className="btn btn-secondary" onClick={() => askTutor("I just ran a race in the lab. Can you explain my result and why the winner won?")}>
+          <MessageCircleQuestion className="h-4 w-4" /> Ask Cyclo to explain my race
         </button>
       </div>
     </Panel>

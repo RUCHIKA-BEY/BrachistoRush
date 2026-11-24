@@ -5,6 +5,7 @@ import { AppProviders, THEME_INIT_SCRIPT } from "@/components/layout/AppProvider
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
 import { Onboarding } from "@/components/layout/Onboarding";
+import { TutorChat } from "@/components/chat/TutorChat";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
 const grotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-grotesk", display: "swap" });
@@ -37,6 +38,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </main>
           <Footer />
           <Onboarding />
+          <TutorChat />
         </AppProviders>
       </body>
     </html>
