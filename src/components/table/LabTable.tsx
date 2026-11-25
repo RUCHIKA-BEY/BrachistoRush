@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { Component, useCallback, useEffect, useState, type ReactNode } from "react";
 import { Keyboard, SlidersHorizontal, X } from "lucide-react";
 import { clock } from "@/lib/lab3d/clock";
 import { useLab } from "@/lib/lab3d/store";
@@ -16,6 +16,20 @@ const TableCanvas = dynamic(() => import("./TableCanvas"), {
   ssr: false,
   loading: () => <div className="absolute inset-0 grid place-items-center text-sm text-muted">Setting up the lab table…</div>,
 });
+
+/** Catches a crash inside the 3D scene so the page can rebuild it instead of going black. */
+class SceneBoundary extends Component<{ onCrash: (e: unknown) => void; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(error: unknown) {
+    this.props.onCrash(error);
+  }
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
 
 /** Plain-text summary of the table for the tutor. */
 function snapshot(): string {
@@ -58,6 +72,16 @@ export function LabTable() {
   const [showLog, setShowLog] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
   const mode = useLab((s) => s.mode);
+
+  // if the 3D view dies (graphics context lost or a render error), rebuild it in low-graphics mode
+  const [viewKey, setViewKey] = useState(0);
+  const [failures, setFailures] = useState(0);
+  const restartView = useCallback((reason: unknown) => {
+    console.warn("3D view restarting:", reason);
+    useLab.getState().set({ quality: "low" });
+    setFailures((f) => f + 1);
+    setTimeout(() => setViewKey((k) => k + 1), 400);
+  }, []);
 
   // the lab fills the screen under the navbar: no page scroll, no footer
   useEffect(() => {
@@ -127,7 +151,28 @@ export function LabTable() {
 
   return (
     <div className="fixed inset-x-0 bottom-0 top-16 z-30 overflow-hidden bg-bg">
-      {colors && <TableCanvas colors={colors} />}
+      {colors && failures < 3 && (
+        <SceneBoundary key={viewKey} onCrash={restartView}>
+          <TableCanvas colors={colors} onLost={() => restartView("WebGL context lost")} />
+        </SceneBoundary>
+      )}
+      {failures > 0 && (
+        <div className="pointer-events-none absolute inset-x-0 top-24 z-10 flex justify-center">
+          <div className="glass pointer-events-auto rounded-xl px-3 py-2 text-xs text-fg-2">
+            {failures < 3 ? "The 3D view restarted in smooth mode." : "Your device's graphics stopped responding."}{" "}
+            <button
+              type="button"
+              className="font-semibold text-primary-soft underline"
+              onClick={() => {
+                setFailures(0);
+                setViewKey((k) => k + 1);
+              }}
+            >
+              {failures < 3 ? "OK" : "Restart 3D view"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* top bar */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 p-3">

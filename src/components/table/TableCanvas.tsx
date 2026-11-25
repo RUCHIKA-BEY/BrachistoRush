@@ -333,7 +333,7 @@ function Scene({ colors }: { colors: ThemeColors }) {
   );
 }
 
-export default function TableCanvas({ colors }: { colors: ThemeColors }) {
+export default function TableCanvas({ colors, onLost }: { colors: ThemeColors; onLost?: () => void }) {
   const quality = useLab((s) => s.settings.quality);
   return (
     <Canvas
@@ -344,6 +344,15 @@ export default function TableCanvas({ colors }: { colors: ThemeColors }) {
       onCreated={({ gl }) => {
         gl.toneMapping = THREE.ACESFilmicToneMapping;
         gl.toneMappingExposure = colors.dark ? 1.0 : 1.05;
+        // weaker graphics chips can drop the WebGL context under load; the page then rebuilds the view
+        gl.domElement.addEventListener(
+          "webglcontextlost",
+          (e) => {
+            e.preventDefault();
+            onLost?.();
+          },
+          { once: true },
+        );
       }}
       onPointerMissed={(e) => {
         if (e.button === 0 && !useLab.getState().placing && performance.now() - pointer.placedAt > 400) useLab.getState().select(null);
