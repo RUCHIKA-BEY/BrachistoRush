@@ -6,3 +6,6 @@ next-env.d.ts
 .env*.local
 .DS_Store
 .next-build/
+
+# Local Claude Code settings
+.claude/
