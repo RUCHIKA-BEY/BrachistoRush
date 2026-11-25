@@ -1,13 +1,15 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { ApiError, GoogleGenAI, type Content } from "@google/genai";
 import { LEVEL_NOTES, TUTOR_SYSTEM_PROMPT, type TutorLevel } from "@/lib/tutor/knowledge";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MODEL = "claude-opus-5-5";
+/** Override with GEMINI_MODEL in .env.local if Google renames or retires this model. */
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 const MAX_TURNS = 24; // messages kept from the end of the conversation
 const MAX_CHARS = 2000; // per user message
-const RATE_LIMIT = { windowMs: 60_000, max: 12 }; // per client per minute
+const MAX_OUTPUT_TOKENS = 8192;
+const RATE_LIMIT = { windowMs: 60_000, max: 12 }; // per visitor per minute
 
 /** One event per line (NDJSON) so the browser can render text as it streams. */
 export type ChatEvent = { t: "text"; v: string } | { t: "error"; v: string } | { t: "done"; stop: string | null };
@@ -36,7 +38,7 @@ function validMessages(raw: unknown): IncomingMessage[] | null {
     if (!content) continue;
     out.push({ role: m.role, content });
   }
-  // the API needs the conversation to start with a user turn and end with one
+  // the conversation must start with a user turn and end with one
   while (out.length && out[0].role !== "user") out.shift();
   if (!out.length || out[out.length - 1].role !== "user") return null;
   return out;
@@ -57,9 +59,25 @@ function json(status: number, error: string) {
   return Response.json({ error }, { status });
 }
 
+/** Map Gemini API failures to messages a student can understand. */
+function friendlyError(err: unknown): string {
+  if (err instanceof ApiError) {
+    console.error("tutor Gemini API error", err.status, err.message);
+    if (err.status === 429) return "The tutor has reached its usage limit for now (quota or billing). Please try again a bit later.";
+    if (err.status === 401 || err.status === 403) return "The tutor's API key isn't valid. Ask your teacher or site admin to check it.";
+    if (err.status === 400) return "The tutor couldn't process that request. If this keeps happening, the site admin should check the API key and model name.";
+    if (err.status === 404) return "The tutor's AI model isn't available. The site admin should check GEMINI_MODEL.";
+    if (err.status >= 500) return "Google's AI service is having trouble right now. Please try again in a moment.";
+    return "Something went wrong on my side. Please try again.";
+  }
+  console.error("tutor error", err);
+  return "Connection problem — please try again.";
+}
+
 export async function POST(req: Request) {
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
-    return json(503, "The tutor isn't connected yet. Add ANTHROPIC_API_KEY to .env.local and restart the server.");
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return json(503, "The tutor isn't connected yet. Add GEMINI_API_KEY to .env.local and restart the server.");
   }
 
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
@@ -77,7 +95,7 @@ export async function POST(req: Request) {
   const page = typeof body.page === "string" ? body.page.split("?")[0] : "/";
   const labState = typeof body.labState === "string" ? body.labState.slice(0, 600) : "";
 
-  // Volatile context goes AFTER the cached block so the long prefix stays cacheable.
+  // Stable knowledge first, per-request context last, so the long prefix stays identical between requests.
   const context = [
     `The student is currently on ${PAGE_NAMES[page] ?? "the website"}.`,
     LEVEL_NOTES[level],
@@ -85,55 +103,54 @@ export async function POST(req: Request) {
   ]
     .filter(Boolean)
     .join("\n");
+  const systemInstruction = `${TUTOR_SYSTEM_PROMPT}\n\n# Current session\n${context}`;
 
-  const client = new Anthropic();
+  // Gemini calls the assistant role "model".
+  const contents: Content[] = messages.map((m) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }],
+  }));
+
+  const ai = new GoogleGenAI({ apiKey });
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (e: ChatEvent) => controller.enqueue(encoder.encode(JSON.stringify(e) + "\n"));
+      let sentText = false;
+      let finish: string | null = null;
+      let blocked = false;
       try {
-        const s = client.beta.messages.stream(
-          {
-            model: MODEL,
-            max_tokens: 8000,
-            betas: ["server-side-fallback-2026-07-01"],
-            fallbacks: "default",
-            output_config: { effort: "medium" },
-            system: [
-              { type: "text", text: TUTOR_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
-              { type: "text", text: context },
-            ],
-            messages,
+        const response = await ai.models.generateContentStream({
+          model: MODEL,
+          contents,
+          config: {
+            systemInstruction,
+            maxOutputTokens: MAX_OUTPUT_TOKENS,
+            abortSignal: req.signal,
           },
-          { signal: req.signal },
-        );
-        for await (const event of s) {
-          if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-            send({ t: "text", v: event.delta.text });
+        });
+        for await (const chunk of response) {
+          if (chunk.promptFeedback?.blockReason) blocked = true;
+          const text = chunk.text;
+          if (text) {
+            sentText = true;
+            send({ t: "text", v: text });
           }
+          const reason = chunk.candidates?.[0]?.finishReason;
+          if (reason) finish = String(reason);
         }
-        const final = await s.finalMessage();
-        if (final.stop_reason === "refusal") {
-          send({ t: "text", v: "\n\nI can't help with that one — but ask me anything about cycloids, gravity or the race!" });
-        } else if (final.stop_reason === "max_tokens") {
+
+        if (blocked || (!sentText && finish && finish !== "STOP")) {
+          send({ t: "text", v: "I can't help with that one — but ask me anything about cycloids, gravity or the race!" });
+        } else if (finish === "MAX_TOKENS") {
           send({ t: "text", v: "\n\n*(That answer got long and was cut off — ask me to continue!)*" });
+        } else if (!sentText) {
+          send({ t: "error", v: "Hmm, I didn't get an answer. Please try again." });
         }
-        send({ t: "done", stop: final.stop_reason });
+        send({ t: "done", stop: finish });
       } catch (err) {
-        if (req.signal.aborted) {
-          // the student pressed stop
-        } else if (err instanceof Anthropic.RateLimitError) {
-          send({ t: "error", v: "The tutor is very busy right now. Please try again in a moment." });
-        } else if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) {
-          send({ t: "error", v: "The tutor's API key isn't valid. Ask your teacher or site admin to check it." });
-        } else if (err instanceof Anthropic.APIError) {
-          console.error("tutor API error", err.status, err.message);
-          send({ t: "error", v: "Something went wrong on my side. Please try again." });
-        } else {
-          console.error("tutor error", err);
-          send({ t: "error", v: "Connection problem — please try again." });
-        }
+        if (!req.signal.aborted) send({ t: "error", v: friendlyError(err) });
       } finally {
         try {
           controller.close();

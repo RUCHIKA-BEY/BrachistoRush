@@ -12,9 +12,11 @@ npm run build    # production build
 
 ### Turn on the Cyclo tutor (AI chatbot)
 
-1. Get an API key at https://platform.claude.com.
-2. Copy `.env.example` to `.env.local` and set `ANTHROPIC_API_KEY=...`.
+1. Create a Gemini API key in Google AI Studio: https://aistudio.google.com/apikey
+2. Copy `.env.example` to `.env.local` and set `GEMINI_API_KEY=...`.
+   Optionally set `GEMINI_MODEL` (default `gemini-3.8-flash`) if Google renames or retires the model.
 3. Restart `npm run dev`. Without a key the chat still opens but says it isn't connected.
+   If the key's quota or billing runs out, the tutor shows a friendly "usage limit" message instead of crashing.
 
 To run a production build while the dev server is running, build into a separate folder:
 `NEXT_DIST_DIR=.next-build npx next build`.
@@ -25,7 +27,7 @@ To run a production build while the dev server is running, build into a separate
 - Levels: Simple / Student / Expert. Starter questions per level.
 - Knows the site: links to sections and can set up lab experiments via links like `/lab?dx=3.5&dh=0.6&mu=0.2&g=moon&racers=cycloid,straight`.
 - Sees the Race Lab's current setup and last result, so "explain my race" works ("Ask Cyclo" button in the Explain step).
-- Server route `src/app/api/chat/route.ts`: Claude Opus 5.5 via the Anthropic SDK, cached system prompt (`src/lib/tutor/knowledge.ts`), server-side refusal fallback, per-IP rate limit, message length caps, topic guardrails.
+- Server route `src/app/api/chat/route.ts`: Google Gemini via the `@google/genai` SDK (streaming), tutor knowledge base and system prompt in `src/lib/tutor/knowledge.ts`, 12 requests/min per visitor, 2,000-character message cap, topic guardrails, friendly errors for quota/billing/API failures.
 
 ## What's built (step 1)
 

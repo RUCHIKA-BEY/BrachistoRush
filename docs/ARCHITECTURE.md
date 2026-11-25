@@ -13,7 +13,7 @@
 | 2D simulation | HTML Canvas 2D, own rAF loop | 60 fps race rendering, trails, particles, vectors, drag handles |
 | 3D | three.js via `@react-three/fiber` + `drei` (lazy-loaded) | Orbit the race track, 3D tubes, lane view; never blocks first paint |
 | Physics | Pure TS module (`src/lib/physics`) | Deterministic RK4 integration along arc length, unit-testable, shared by 2D/3D/charts |
-| Chatbot (step 2) | Next.js route handler → Claude API, streaming | Topic-restricted tutor with links into site sections |
+| Chatbot (step 2) | Next.js route handler → Google Gemini API (`@google/genai`), streaming | Topic-restricted tutor with links into site sections |
 | State | React state + refs; `localStorage` for theme, onboarding, progress | No backend needed for the core experience |
 
 ## 2. Information architecture
@@ -62,7 +62,7 @@ floating chatbot launcher (step 2).
 ## 5. Build order
 
 1. **Foundation (this step)** — scaffolding, theme system, layout, navigation, onboarding, progress, Home, Race Lab, cycloid generator.
-2. AI tutor chatbot (Claude API route, topic guardrails, deep links into sections).
+2. AI tutor chatbot (Gemini API route, topic guardrails, deep links into sections and lab presets).
 3. "Why the Cycloid Wins" + "The Problem" (timeline infographic, Snell's-law light analogy, energy infographic).
 4. Explore Further (rolling vs sliding, tautochrone race, friction-optimal curves).
 5. Challenges & Quizzes (beat-the-cycloid, badges), Real World.
