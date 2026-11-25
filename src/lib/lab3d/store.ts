@@ -5,7 +5,11 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { clock } from "./clock";
 import { runBall, type BallRun } from "./physics";
 import { frameOf, toLocal, toWorld, trackPath } from "./tracks";
-import { BALLS, GRAVITY, TABLE, TRACKS, type BallKind, type BallObj, type CameraMode, type GravityId, type PlaceItem, type TableObj, type TrackObj } from "./types";
+import { BALLS, GRAVITY, TABLE, TRACKS, type BallKind, type BallObj, type CameraMode, type GravityId, type PlaceItem, type TableObj, type TrackObj, type TrackShape } from "./types";
+
+export type LabMode = "race" | "build";
+export const RACE_ORDER: TrackShape[] = ["cycloid", "straight", "arc", "parabola", "custom"];
+export const LANE_GAP = 0.34;
 
 export type RunStatus = "idle" | "running" | "paused" | "finished";
 
@@ -31,9 +35,16 @@ export interface Settings {
   snap: boolean;
   speed: number;
   camera: CameraMode;
+  /** race mode: shared finish point and ball type */
+  raceW: number;
+  raceH: number;
+  raceBall: BallKind;
+  /** drops to "low" (no post effects, lower resolution) when the frame rate falls */
+  quality: "high" | "low";
 }
 
 interface LabState {
+  mode: LabMode;
   objects: TableObj[];
   selectedId: string | null;
   placing: PlaceItem | null;
@@ -66,6 +77,13 @@ interface LabState {
   reset: () => void;
   finish: () => void;
   clearLog: () => void;
+
+  setMode: (m: LabMode) => void;
+  layoutRace: () => void;
+  toggleRaceTrack: (shape: TrackShape) => void;
+  setRace: (patch: Partial<Pick<Settings, "raceW" | "raceH" | "raceBall">>) => void;
+  /** put a ball (an existing one, or a new one of `kind`) into a track's start gate */
+  putBallOn: (trackId: string, ballId: string | null, kind?: BallKind) => void;
 }
 
 let counter = 0;
@@ -113,6 +131,58 @@ export function snapTrackFor(objects: TableObj[], x: number, z: number, exceptBa
   return best;
 }
 
+/** localStorage writes are batched: dragging a part would otherwise write on every pointer move. */
+const batchedStorage = (() => {
+  const pending = new Map<string, string>();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const flush = () => {
+    for (const [k, v] of pending) {
+      try {
+        localStorage.setItem(k, v);
+      } catch {
+        /* storage full or blocked */
+      }
+    }
+    pending.clear();
+  };
+  if (typeof window !== "undefined") window.addEventListener("pagehide", flush);
+  return {
+    getItem: (k: string) => {
+      try {
+        return localStorage.getItem(k);
+      } catch {
+        return null;
+      }
+    },
+    setItem: (k: string, v: string) => {
+      pending.set(k, v);
+      clearTimeout(timer);
+      timer = setTimeout(flush, 500);
+    },
+    removeItem: (k: string) => {
+      try {
+        localStorage.removeItem(k);
+      } catch {
+        /* ignore */
+      }
+    },
+  };
+})();
+
+const DEFAULT_SETTINGS: Settings = {
+  gravity: "earth",
+  mu: 0,
+  clearBoards: true, // see-through boards so every lane's ball stays visible
+  liveForces: false,
+  snap: true,
+  speed: 1,
+  camera: "free",
+  raceW: 1.2,
+  raceH: 0.55,
+  raceBall: "steel",
+  quality: "high",
+};
+
 export const useLab = create<LabState>()(
   persist(
     (set, get) => {
@@ -125,6 +195,7 @@ export const useLab = create<LabState>()(
       };
 
       return {
+        mode: "race",
         objects: defaultObjects(),
         selectedId: null,
         placing: null,
@@ -132,7 +203,7 @@ export const useLab = create<LabState>()(
         status: "idle",
         runs: {},
         duration: 0,
-        settings: { gravity: "earth", mu: 0, clearBoards: false, liveForces: false, snap: true, speed: 1, camera: "free" },
+        settings: DEFAULT_SETTINGS,
         log: [],
         cameraNonce: 0,
 
@@ -302,13 +373,109 @@ export const useLab = create<LabState>()(
           set({ status: "finished", log: [...records, ...get().log].slice(0, 200) });
         },
         clearLog: () => set({ log: [] }),
+
+        setMode: (m) => {
+          if (get().status !== "idle") get().reset();
+          set({ mode: m, selectedId: null, placing: null });
+          if (m === "race") get().layoutRace();
+          get().setCamera("free");
+        },
+
+        layoutRace: () => {
+          const { objects, settings } = get();
+          // one lane per track shape, in a fixed order, all sharing the same A and B
+          const seen = new Set<TrackShape>();
+          const tracks = objects
+            .filter((o): o is TrackObj => o.type === "track")
+            .filter((t) => {
+              if (seen.has(t.shape)) return false;
+              seen.add(t.shape);
+              return true;
+            })
+            .sort((a, b) => RACE_ORDER.indexOf(a.shape) - RACE_ORDER.indexOf(b.shape));
+          const n = tracks.length;
+          const laid: TableObj[] = tracks.map((t, i) => ({ ...t, x: 0, z: (i - (n - 1) / 2) * LANE_GAP, rot: 0, W: settings.raceW, H: settings.raceH }));
+          // exactly one ball of the chosen kind in every start gate
+          for (const t of tracks) {
+            const old = objects.find((o): o is BallObj => o.type === "ball" && o.trackId === t.id);
+            laid.push({ id: old?.id ?? uid("b"), type: "ball", kind: settings.raceBall, x: 0, z: 0, trackId: t.id });
+          }
+          const sw = objects.find((o) => o.type === "stopwatch");
+          laid.push({ id: sw?.id ?? uid("s"), type: "stopwatch", x: settings.raceW / 2 + 0.05, z: ((n - 1) / 2) * LANE_GAP + 0.32, rot: -0.35 });
+          set({ objects: laid });
+        },
+
+        toggleRaceTrack: (shape) => {
+          if (!editable()) return;
+          const { objects } = get();
+          const existing = objects.find((o): o is TrackObj => o.type === "track" && o.shape === shape);
+          if (existing) {
+            if (objects.filter((o) => o.type === "track").length <= 1) return; // keep at least one lane
+            set({ objects: objects.filter((o) => o.id !== existing.id && !(o.type === "ball" && o.trackId === existing.id)) });
+          } else {
+            const t: TrackObj = {
+              id: uid("t"),
+              type: "track",
+              shape,
+              x: 0,
+              z: 0,
+              rot: 0,
+              W: 1.2,
+              H: 0.55,
+              ...(shape === "custom" ? { handles: [[0.12, 0.75], [0.55, 1.05]] as [number, number][] } : {}),
+            };
+            set({ objects: [...objects, t] });
+          }
+          get().layoutRace();
+        },
+
+        setRace: (patch) => {
+          if (!editable()) return;
+          set({ settings: { ...get().settings, ...patch } });
+          get().layoutRace();
+        },
+
+        putBallOn: (trackId, ballId, kind) => {
+          editable();
+          const objs = get().objects;
+          const track = objs.find((o): o is TrackObj => o.id === trackId && o.type === "track");
+          if (!track) return;
+          let id = ballId;
+          let list = objs;
+          if (!id) {
+            id = uid("b");
+            list = [...objs, { id, type: "ball", kind: kind ?? "steel", x: track.x, z: track.z, trackId: null }];
+          }
+          const a = trackStartWorld(track);
+          set({
+            objects: list.map((o) => {
+              if (o.id === id) return { ...(o as BallObj), trackId, x: a.x, z: a.z };
+              if (o.type === "ball" && o.trackId === trackId) {
+                // the previous occupant moves onto the table beside the start
+                const side = toWorld({ x: a.x, z: a.z, rot: track.rot }, -0.1, 0.14);
+                return { ...o, trackId: null, ...clampToTable(side.x, side.z) };
+              }
+              return o;
+            }),
+            selectedId: id,
+          });
+        },
       };
     },
     {
       name: "br-lab-table",
-      version: 1,
-      storage: createJSONStorage(() => localStorage),
-      partialize: (s) => ({ objects: s.objects, settings: { ...s.settings, camera: "free" as CameraMode, speed: 1 }, log: s.log }),
+      version: 2,
+      storage: createJSONStorage(() => batchedStorage),
+      partialize: (s) => ({ mode: s.mode, objects: s.objects, settings: { ...s.settings, camera: "free" as CameraMode, speed: 1 }, log: s.log }),
+      // v1 saves had no race mode: returning students start in the simpler race mode
+      migrate: (persisted, version) => (version < 2 ? { ...(persisted as object), mode: "race" as LabMode } : persisted) as LabState,
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<LabState>;
+        return { ...current, ...p, settings: { ...DEFAULT_SETTINGS, ...(p.settings ?? {}) } };
+      },
+      onRehydrateStorage: () => (state) => {
+        if (state?.mode === "race") state.layoutRace();
+      },
     },
   ),
 );

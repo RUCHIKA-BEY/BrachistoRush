@@ -1,6 +1,6 @@
 "use client";
 
-import { CameraControls, Environment, Lightformer } from "@react-three/drei";
+import { CameraControls, Environment, Lightformer, PerformanceMonitor } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Bloom, EffectComposer, Vignette } from "@react-three/postprocessing";
 import { useEffect, useMemo, useRef } from "react";
@@ -11,7 +11,7 @@ import { localAt, toLocal, toWorld, trackPath } from "@/lib/lab3d/tracks";
 import { BALLS, type BallObj, type TrackObj } from "@/lib/lab3d/types";
 import type { ThemeColors } from "@/lib/useThemeColors";
 import { BallMesh, LooseBall } from "./Balls";
-import { pointer, rayToPlane, rayToTable } from "./interaction";
+import { pointer, rayToPlane, rayToTable, trackUnderRay } from "./interaction";
 import { Stopwatch3D } from "./Stopwatch3D";
 import { TableSurface } from "./TableSurface";
 import { trackGeometry, STRIP } from "./trackGeometry";
@@ -30,7 +30,7 @@ function ClockDriver() {
 
 /** Window-level pointer handling for sliding, turning, shaping and placing parts. */
 function Interaction() {
-  const { camera, gl } = useThree();
+  const { camera, gl, scene } = useThree();
   useEffect(() => {
     const ray = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
@@ -48,6 +48,8 @@ function Interaction() {
       if (st.placing) {
         const p = rayToTable(toRay(ev));
         pointer.ghost.over = !!p && overCanvas(ev);
+        // a ball being placed goes into whichever track is under the pointer
+        pointer.ghost.trackId = st.placing.type === "ball" && pointer.ghost.over ? trackUnderRay(ray, scene) : null;
         if (p) {
           pointer.ghost.x = snapV(p.x);
           pointer.ghost.z = snapV(p.z);
@@ -89,7 +91,8 @@ function Interaction() {
       const st = useLab.getState();
       if (st.placing) {
         if (overCanvas(ev) && pointer.ghost.over) {
-          st.place(st.placing, pointer.ghost.x, pointer.ghost.z);
+          if (st.placing.type === "ball" && pointer.ghost.trackId) st.putBallOn(pointer.ghost.trackId, null, st.placing.kind);
+          else st.place(st.placing, pointer.ghost.x, pointer.ghost.z);
           pointer.placedAt = performance.now();
           if (!ev.shiftKey) st.setPlacing(null);
         }
@@ -100,7 +103,12 @@ function Interaction() {
       pointer.drag = null;
       if (d.kind === "move" && d.moved) {
         const o = useLab.getState().objects.find((q) => q.id === d.id);
-        if (o?.type === "ball") st.dropBall(o.id, o.x, o.z);
+        if (o?.type === "ball") {
+          toRay(ev);
+          const tid = trackUnderRay(ray, scene, o.id);
+          if (tid) st.putBallOn(tid, o.id);
+          else st.dropBall(o.id, o.x, o.z);
+        }
       }
       st.setDragging(false);
       if (pointer.controls) pointer.controls.enabled = true;
@@ -114,7 +122,7 @@ function Interaction() {
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [camera, gl]);
+  }, [camera, gl, scene]);
   return null;
 }
 
@@ -134,9 +142,11 @@ function Ghost() {
     g.visible = pointer.ghost.over;
     let { x, z } = pointer.ghost;
     let y = 0;
+    g.traverse((o) => void (o.userData.ghost = true));
     if (placing.type === "ball") {
       const objs = useLab.getState().objects;
-      const t = snapTrackFor(objs, x, z);
+      const under = pointer.ghost.trackId ? objs.find((o): o is TrackObj => o.id === pointer.ghost.trackId && o.type === "track") : undefined;
+      const t = under ?? snapTrackFor(objs, x, z);
       const r = BALLS[placing.kind].radius;
       if (t) {
         const p = localAt(trackPath(t), t.W, 0);
@@ -197,7 +207,8 @@ function CameraRig() {
   useEffect(() => {
     // tall phone screens need the camera further back to fit the table
     const k = aspect < 1 ? Math.min(2.1, 1 / aspect) : 1;
-    void ref.current?.setLookAt(-1.25 * k, 1.05 * k, 1.95 * k, 0.05, 0.2, 0, false);
+    // aim a little left of centre so the tracks sit to the right of the setup panel
+    void ref.current?.setLookAt(-1.15 * k, 1.0 * k, 2.05 * k, aspect < 1 ? 0.05 : -0.22, 0.22, 0, false);
     pointer.controls = ref.current;
     return () => void (pointer.controls = null);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- frame once on mount
@@ -213,7 +224,10 @@ function CameraRig() {
     c.smoothTime = 0.35;
     if (mode === "side") void c.setLookAt(m.x, 0.4, m.z + 2.4, m.x, 0.28, m.z, true);
     else if (mode === "top") void c.setLookAt(m.x, 3.2, m.z + 0.02, m.x, 0, m.z, true);
-    else if (mode === "cinematic") void c.setLookAt(m.x - 1.9, 0.75, m.z + 1.6, m.x, 0.25, m.z, true);
+    else if (mode === "free" && nonce > 0) {
+      const k = aspect < 1 ? Math.min(2.1, 1 / aspect) : 1;
+      void c.setLookAt(m.x - 1.15 * k, 1.0 * k, m.z + 2.05 * k, m.x + (aspect < 1 ? 0.05 : -0.22), 0.22, m.z, true);
+    } else if (mode === "cinematic") void c.setLookAt(m.x - 1.9, 0.75, m.z + 1.6, m.x, 0.25, m.z, true);
     else if (mode === "closeup" || mode === "follow") {
       const id = focusBall();
       const b = id ? sceneRefs.balls.get(id) : undefined;
@@ -222,6 +236,7 @@ function CameraRig() {
         void c.setLookAt(tmp.x - 0.45, tmp.y + 0.3, tmp.z + 0.85, tmp.x, tmp.y + 0.05, tmp.z, true);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-frame only when the mode is picked
   }, [mode, nonce, tmp]);
 
   useFrame((_, dt) => {
@@ -260,7 +275,7 @@ function Lights({ colors }: { colors: ThemeColors }) {
         position={[1.8, 3.6, 2.2]}
         intensity={dark ? 2.2 : 1.7}
         castShadow
-        shadow-mapSize={[2048, 2048]}
+        shadow-mapSize={[1024, 1024]}
         shadow-bias={-0.0003}
         shadow-normalBias={0.02}
         shadow-camera-left={-2.2}
@@ -271,7 +286,7 @@ function Lights({ colors }: { colors: ThemeColors }) {
         shadow-camera-far={9}
       />
       <directionalLight position={[-2.5, 1.5, -1.5]} intensity={dark ? 0.6 : 0.8} color={dark ? "#818cf8" : "#ffffff"} />
-      <Environment resolution={256} frames={1}>
+      <Environment resolution={128} frames={1}>
         <Lightformer form="rect" intensity={2.2} position={[0, 4, 0]} rotation-x={Math.PI / 2} scale={[6, 3, 1]} />
         <Lightformer form="rect" intensity={1.2} position={[-4, 1.5, 2]} rotation-y={Math.PI / 2.5} scale={[4, 1.2, 1]} />
         <Lightformer form="rect" intensity={1} position={[4, 1.2, -2]} rotation-y={-Math.PI / 2.5} scale={[4, 1, 1]} />
@@ -283,6 +298,7 @@ function Lights({ colors }: { colors: ThemeColors }) {
 
 function Scene({ colors }: { colors: ThemeColors }) {
   const objects = useLab((s) => s.objects);
+  const quality = useLab((s) => s.settings.quality);
   const selectedId = useLab((s) => s.selectedId);
   const tracks = objects.filter((o): o is TrackObj => o.type === "track");
   const balls = objects.filter((o): o is BallObj => o.type === "ball");
@@ -305,8 +321,10 @@ function Scene({ colors }: { colors: ThemeColors }) {
       <Interaction />
       <ClockDriver />
       <CameraRig />
-      {!colors.highContrast && (
-        <EffectComposer multisampling={4}>
+      {/* drop to low quality automatically if the device cannot keep up */}
+      <PerformanceMonitor onDecline={() => useLab.getState().set({ quality: "low" })} flipflops={2} />
+      {!colors.highContrast && quality === "high" && (
+        <EffectComposer multisampling={0}>
           <Bloom mipmapBlur intensity={colors.dark ? 0.55 : 0.25} luminanceThreshold={0.82} luminanceSmoothing={0.2} />
           <Vignette offset={0.32} darkness={colors.dark ? 0.5 : 0.25} />
         </EffectComposer>
@@ -316,10 +334,11 @@ function Scene({ colors }: { colors: ThemeColors }) {
 }
 
 export default function TableCanvas({ colors }: { colors: ThemeColors }) {
+  const quality = useLab((s) => s.settings.quality);
   return (
     <Canvas
-      shadows="soft"
-      dpr={[1, 1.75]}
+      shadows
+      dpr={quality === "high" ? [1, 1.5] : 1}
       camera={{ position: [-1.5, 1.25, 2.3], fov: 42, near: 0.02, far: 60 }}
       gl={{ antialias: true, powerPreference: "high-performance" }}
       onCreated={({ gl }) => {

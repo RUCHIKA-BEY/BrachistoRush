@@ -3,13 +3,14 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Keyboard, Settings2, SlidersHorizontal, X } from "lucide-react";
+import { Keyboard, SlidersHorizontal, X } from "lucide-react";
 import { clock } from "@/lib/lab3d/clock";
 import { useLab } from "@/lib/lab3d/store";
 import { BALLS, GRAVITY, TRACKS, type TrackObj } from "@/lib/lab3d/types";
 import { setLabSnapshot } from "@/lib/tutor/bridge";
 import { useThemeColors } from "@/lib/useThemeColors";
-import { Inspector, RunBar, RunLog, SettingsPanel, Tray } from "./LabUI";
+import { LabGuide } from "./LabGuide";
+import { Inspector, ModeSwitch, RaceTray, RunBar, RunLog, SettingsPanel, Tray } from "./LabUI";
 
 const TableCanvas = dynamic(() => import("./TableCanvas"), {
   ssr: false,
@@ -56,23 +57,13 @@ export function LabTable() {
   const [showSettings, setShowSettings] = useState(false);
   const [showLog, setShowLog] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
-  const [hint, setHint] = useState(false);
+  const mode = useLab((s) => s.mode);
 
+  // the lab fills the screen under the navbar: no page scroll, no footer
   useEffect(() => {
-    try {
-      setHint(localStorage.getItem("br-table-hint") !== "1");
-    } catch {
-      /* ignore */
-    }
+    document.body.classList.add("lab-fullscreen");
+    return () => document.body.classList.remove("lab-fullscreen");
   }, []);
-  const dismissHint = () => {
-    setHint(false);
-    try {
-      localStorage.setItem("br-table-hint", "1");
-    } catch {
-      /* ignore */
-    }
-  };
 
   // keep the tutor informed about the table
   useEffect(() => {
@@ -106,17 +97,17 @@ export function LabTable() {
           break;
         case "Delete":
         case "Backspace":
-          if (sel) st.remove(sel.id);
+          if (sel && st.mode === "build") st.remove(sel.id);
           break;
         case "d":
         case "D":
-          if (sel) st.duplicate(sel.id);
+          if (sel && st.mode === "build") st.duplicate(sel.id);
           break;
         case "q":
         case "Q":
         case "e":
         case "E":
-          if (sel && "rot" in sel) st.update(sel.id, { rot: sel.rot + (e.key.toLowerCase() === "q" ? 1 : -1) * (Math.PI / 12) });
+          if (sel && st.mode === "build" && "rot" in sel) st.update(sel.id, { rot: sel.rot + (e.key.toLowerCase() === "q" ? 1 : -1) * (Math.PI / 12) });
           break;
         case "r":
         case "R":
@@ -135,35 +126,36 @@ export function LabTable() {
   }, []);
 
   return (
-    <div className="relative h-[calc(100dvh-4rem)] min-h-[520px] w-full overflow-hidden bg-bg">
+    <div className="fixed inset-x-0 bottom-0 top-16 z-30 overflow-hidden bg-bg">
       {colors && <TableCanvas colors={colors} />}
 
       {/* top bar */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 p-3">
         <div className="glass pointer-events-auto rounded-2xl px-3 py-2">
           <p className="text-[10px] font-bold uppercase tracking-widest text-primary-soft">Step 3 · Race Lab</p>
-          <h1 className="font-display text-base font-bold leading-tight text-fg sm:text-lg">3D Lab Table</h1>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2">
+            <h1 className="font-display text-base font-bold leading-tight text-fg sm:text-lg">3D Lab</h1>
+            <ModeSwitch />
+          </div>
           <Link href="/lab/classic" className="text-[11px] text-muted underline-offset-2 hover:text-fg hover:underline">
             Classic measuring lab →
           </Link>
         </div>
         <div className="pointer-events-auto flex gap-1.5">
-          <button type="button" className="glass grid h-10 w-10 place-items-center rounded-xl text-fg-2 hover:text-fg" onClick={() => setShowKeys((v) => !v)} aria-label="Keyboard shortcuts" aria-expanded={showKeys}>
+          <button type="button" className="glass hidden h-10 w-10 place-items-center rounded-xl text-fg-2 hover:text-fg sm:grid" onClick={() => setShowKeys((v) => !v)} aria-label="Keyboard shortcuts" aria-expanded={showKeys}>
             <Keyboard className="h-4.5 w-4.5" />
           </button>
-          <button type="button" className="glass inline-flex h-10 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-fg-2 hover:text-fg" onClick={() => setShowSettings((v) => !v)} aria-expanded={showSettings}>
-            <SlidersHorizontal className="h-4 w-4" /> <span className="hidden sm:inline">Lab settings</span>
+          <button type="button" className="glass inline-flex h-10 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-fg-2 hover:text-fg" onClick={() => setShowSettings((v) => !v)} aria-expanded={showSettings} aria-label="Lab settings">
+            <SlidersHorizontal className="h-4 w-4" /> <span className="hidden sm:inline">Settings</span>
           </button>
         </div>
       </div>
 
-      {/* left: parts tray */}
-      <div className="pointer-events-none absolute left-3 right-3 top-[5.6rem] z-10 md:bottom-24 md:right-auto">
-        <Tray />
-      </div>
+      {/* left: race setup or parts tray */}
+      <div className="pointer-events-none absolute left-3 right-3 top-[6.6rem] z-10 md:bottom-28 md:right-auto">{mode === "race" ? <RaceTray /> : <Tray />}</div>
 
-      {/* right: settings + inspector */}
-      <div className="pointer-events-none absolute bottom-40 right-3 top-[9.5rem] z-10 flex w-[calc(100%-1.5rem)] flex-col items-end gap-2 overflow-y-auto md:bottom-24 md:top-16 md:w-72">
+      {/* right: settings, shortcuts, inspector */}
+      <div className="pointer-events-none absolute right-3 top-[6.6rem] z-20 flex max-h-[calc(100%-14rem)] w-[calc(100%-1.5rem)] flex-col items-end gap-2 overflow-y-auto md:top-16 md:w-72">
         {showKeys && (
           <div className="glass pointer-events-auto w-full rounded-2xl p-3 md:w-72">
             <div className="flex items-center justify-between">
@@ -185,29 +177,15 @@ export function LabTable() {
           </div>
         )}
         {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
-        {selectedId && <Inspector />}
+        {mode === "build" && selectedId && <Inspector />}
       </div>
 
-      {/* bottom: run bar + log */}
-      <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex flex-col items-start gap-2 pr-16 md:items-center md:pr-20">
+      {/* bottom: guide, run log, run bar */}
+      <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex flex-col items-start gap-2 pr-16 md:items-center md:pr-20">
+        <LabGuide />
         {showLog && <RunLog onClose={() => setShowLog(false)} />}
         <RunBar onLog={() => setShowLog((v) => !v)} logCount={logCount} />
       </div>
-
-      {hint && (
-        <div className="glass absolute left-1/2 top-3 z-20 hidden max-w-md -translate-x-1/2 rounded-2xl p-3 text-sm text-fg-2 shadow-xl lg:block">
-          <div className="flex items-start gap-3">
-            <Settings2 className="mt-0.5 h-4 w-4 shrink-0 text-primary-soft" />
-            <p>
-              <strong className="text-fg">Welcome to the lab table.</strong> Pick a part from the tray and click the table to place it. Drag parts to move them, use the ring to turn them, and drop a ball near a track&apos;s <strong>A</strong>. Press{" "}
-              <kbd className="rounded border border-line px-1 font-mono text-[11px]">Space</kbd> to release, and again to freeze time.
-            </p>
-            <button type="button" onClick={dismissHint} className="rounded-lg p-1 text-muted hover:text-fg" aria-label="Dismiss tip">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

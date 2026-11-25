@@ -327,3 +327,34 @@ input[type="range"] {
 .no-scrollbar {
   scrollbar-width: none;
 }
+
+/* lab guide: the control the student should use next */
+@keyframes guide-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px var(--primary), 0 0 0 6px color-mix(in srgb, var(--primary) 25%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 2px var(--primary), 0 0 0 12px color-mix(in srgb, var(--primary) 0%, transparent);
+  }
+}
+.guide-glow {
+  animation: guide-glow 1.4s ease-in-out infinite;
+  border-radius: 16px;
+  position: relative;
+  z-index: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .guide-glow {
+    animation: none;
+    box-shadow: 0 0 0 3px var(--primary);
+  }
+}
+
+/* the 3D lab fills the screen under the navbar: no footer, no page scroll */
+body.lab-fullscreen {
+  overflow: hidden;
+}
+body.lab-fullscreen footer {
+  display: none;
+}

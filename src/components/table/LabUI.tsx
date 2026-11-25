@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Check,
   Camera,
   Clapperboard,
   Copy,
@@ -18,13 +19,13 @@ import {
   RotateCw,
   Rows3,
   Scan,
-
+  Sparkles,
   Trash2,
   Video,
   X,
 } from "lucide-react";
 import { clock } from "@/lib/lab3d/clock";
-import { useLab } from "@/lib/lab3d/store";
+import { RACE_ORDER, useLab } from "@/lib/lab3d/store";
 import { DEFAULT_HANDLES, trackPath } from "@/lib/lab3d/tracks";
 import { BALLS, GRAVITY, TRACKS, type BallKind, type CameraMode, type GravityId, type PlaceItem, type TableObj, type TrackShape } from "@/lib/lab3d/types";
 import { askTutor } from "@/lib/tutor/bridge";
@@ -284,6 +285,7 @@ export function Inspector() {
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const settings = useLab((s) => s.settings);
   const status = useLab((s) => s.status);
+  const mode = useLab((s) => s.mode);
   const { set, lineUp, resetTable, clearTable } = useLab.getState();
   const locked = status === "running" || status === "paused";
   return (
@@ -314,8 +316,10 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       <div className="mt-1 border-t border-line pt-1">
         <Toggle checked={settings.clearBoards} onChange={(v) => set({ clearBoards: v })} label="See-through boards" icon={<Layers className="h-4 w-4" />} />
         <Toggle checked={settings.liveForces} onChange={(v) => set({ liveForces: v })} label="Show arrows while running" icon={<Eye className="h-4 w-4" />} />
-        <Toggle checked={settings.snap} onChange={(v) => set({ snap: v })} label="Snap to 5 cm / 15°" icon={<Magnet className="h-4 w-4" />} />
+        {mode === "build" && <Toggle checked={settings.snap} onChange={(v) => set({ snap: v })} label="Snap to 5 cm / 15°" icon={<Magnet className="h-4 w-4" />} />}
+        <Toggle checked={settings.quality === "high"} onChange={(v) => set({ quality: v ? "high" : "low" })} label="Glow effects (turn off if slow)" icon={<Sparkles className="h-4 w-4" />} />
       </div>
+      {mode === "build" && (
       <div className="mt-2 grid grid-cols-1 gap-1.5 border-t border-line pt-3">
         <button type="button" disabled={locked} className="btn btn-secondary !py-2 !text-xs" onClick={lineUp}>
           <Rows3 className="h-3.5 w-3.5" /> Line up tracks for a fair race
@@ -329,6 +333,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -377,7 +382,7 @@ export function RunBar({ onLog, logCount }: { onLog: () => void; logCount: numbe
   return (
     <div className={`${panel} pointer-events-auto flex max-w-full flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2`}>
       <div className="flex items-center gap-1.5">
-        <button type="button" className="btn btn-primary !px-4 !py-2" onClick={main.act} disabled={!hasBall && status === "idle"} title="Space">
+        <button type="button" data-guide="release" className="btn btn-primary !px-5 !py-2.5 !text-base" onClick={main.act} disabled={!hasBall && status === "idle"} title="Space">
           {main.icon} {main.label}
         </button>
         <button type="button" className="btn btn-ghost !px-2.5 !py-2" onClick={reset} disabled={status === "idle"} title="Reset balls to the gates (R)" aria-label="Reset">
@@ -389,7 +394,7 @@ export function RunBar({ onLog, logCount }: { onLog: () => void; logCount: numbe
         </span>
       </div>
 
-      <div className="flex items-center gap-1" role="group" aria-label="Slow motion">
+      <div className={`items-center gap-1 ${status === "idle" ? "hidden sm:flex" : "flex"}`} role="group" aria-label="Slow motion">
         {[1, 0.5, 0.25, 0.1].map((s) => (
           <button
             key={s}
@@ -402,7 +407,7 @@ export function RunBar({ onLog, logCount }: { onLog: () => void; logCount: numbe
         ))}
       </div>
 
-      <label className="flex min-w-[8rem] flex-1 items-center gap-2 text-[11px] text-muted" title="Scrub through the run (freezes time)">
+      <label className={`min-w-[8rem] flex-1 items-center gap-2 text-[11px] text-muted ${status === "idle" ? "hidden sm:flex" : "flex"}`} title="Scrub through the run (freezes time)">
         Timeline
         <input
           ref={scrub}
@@ -426,7 +431,7 @@ export function RunBar({ onLog, logCount }: { onLog: () => void; logCount: numbe
         />
       </label>
 
-      <div className="flex items-center gap-1" role="group" aria-label="Camera">
+      <div className="flex max-w-full items-center gap-1 overflow-x-auto" role="group" aria-label="Camera">
         {CAMS.map((c) => (
           <button
             key={c.id}
@@ -524,3 +529,116 @@ export function RunLog({ onClose }: { onClose: () => void }) {
   );
 }
 
+
+
+/** Race mode: tap tracks in or out, pick the ball, the finish point and the planet. No dragging needed. */
+export function RaceTray() {
+  const tracks = useLab((s) => s.objects.filter((o) => o.type === "track").length);
+  const has = useLab((s) => RACE_ORDER.filter((sh) => s.objects.some((o) => o.type === "track" && o.shape === sh)).join(","));
+  const settings = useLab((s) => s.settings);
+  const status = useLab((s) => s.status);
+  const { toggleRaceTrack, setRace, set } = useLab.getState();
+  const locked = status === "running" || status === "paused";
+  const on = has.split(",");
+  return (
+    <div className={`${panel} pointer-events-auto flex max-h-full flex-col gap-3 overflow-y-auto p-2.5 md:w-56`} aria-label="Race setup">
+      <section data-guide="tray-tracks" className="rounded-xl p-0.5">
+        <p className="px-1 pb-1 text-[10px] font-bold uppercase tracking-widest text-muted">1 · Tracks to race</p>
+        <div className="flex gap-1.5 overflow-x-auto md:grid md:grid-cols-1 md:overflow-visible">
+          {RACE_ORDER.map((sh) => {
+            const active = on.includes(sh);
+            return (
+              <button
+                key={sh}
+                type="button"
+                disabled={locked || (active && tracks <= 1)}
+                onClick={() => toggleRaceTrack(sh)}
+                aria-pressed={active}
+                title={TRACKS[sh].blurb}
+                className={`flex shrink-0 items-center gap-2 rounded-xl border px-2.5 py-2 text-left text-sm font-semibold transition-colors disabled:opacity-50 ${
+                  active ? "border-primary/60 bg-primary/12 text-fg" : "border-line text-fg-2 hover:bg-surface-soft"
+                }`}
+              >
+                <ShapeIcon shape={sh} />
+                <span className="flex-1 whitespace-nowrap">{TRACKS[sh].label}</span>
+                <span className={`grid h-5 w-5 place-items-center rounded-full border ${active ? "border-primary bg-primary text-on-primary" : "border-line"}`} aria-hidden="true">
+                  {active && <Check className="h-3.5 w-3.5" />}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section data-guide="tray-ball" className="rounded-xl p-0.5">
+        <p className="px-1 pb-1 text-[10px] font-bold uppercase tracking-widest text-muted">2 · Ball</p>
+        <div className="grid grid-cols-3 gap-1">
+          {(Object.keys(BALLS) as BallKind[]).map((k) => (
+            <button
+              key={k}
+              type="button"
+              disabled={locked}
+              onClick={() => setRace({ raceBall: k })}
+              title={BALLS[k].note}
+              className={`flex flex-col items-center gap-0.5 rounded-lg border py-1.5 text-[11px] font-semibold disabled:opacity-50 ${settings.raceBall === k ? "border-primary bg-primary/12 text-fg" : "border-line text-fg-2 hover:bg-surface-soft"}`}
+            >
+              <BallIcon kind={k} />
+              {BALLS[k].short}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="hidden rounded-xl p-0.5 md:block">
+        <p className="px-1 pb-1 text-[10px] font-bold uppercase tracking-widest text-muted">3 · Finish point B</p>
+        <fieldset disabled={locked} className="px-1">
+          <Slider label="How far" value={settings.raceW} min={0.6} max={1.6} step={0.05} unit="m" onChange={(v) => setRace({ raceW: v })} />
+          <Slider label="How deep" value={settings.raceH} min={0.3} max={0.9} step={0.05} unit="m" onChange={(v) => setRace({ raceH: v })} />
+        </fieldset>
+      </section>
+
+      <section className="hidden rounded-xl p-0.5 md:block">
+        <p className="px-1 pb-1 text-[10px] font-bold uppercase tracking-widest text-muted">4 · Where?</p>
+        <div className="grid grid-cols-4 gap-1">
+          {(Object.keys(GRAVITY) as GravityId[]).map((g) => (
+            <button
+              key={g}
+              type="button"
+              disabled={locked}
+              onClick={() => set({ gravity: g })}
+              className={`rounded-lg border py-1 text-[10px] font-semibold disabled:opacity-50 ${settings.gravity === g ? "border-primary bg-primary/12 text-fg" : "border-line text-fg-2 hover:bg-surface-soft"}`}
+            >
+              {GRAVITY[g].label}
+            </button>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/** Race mode (simple, for everyone) or free build (move, turn and shape parts yourself). */
+export function ModeSwitch() {
+  const mode = useLab((s) => s.mode);
+  const setMode = useLab((s) => s.setMode);
+  return (
+    <div className="inline-flex rounded-full border border-line bg-surface-soft p-0.5 text-[11px] font-bold" role="group" aria-label="Lab mode">
+      {(
+        [
+          ["race", "Race"],
+          ["build", "Free build"],
+        ] as const
+      ).map(([m, label]) => (
+        <button
+          key={m}
+          type="button"
+          onClick={() => setMode(m)}
+          aria-pressed={mode === m}
+          className={`rounded-full px-2.5 py-1 transition-colors ${mode === m ? "bg-primary text-on-primary" : "text-fg-2 hover:text-fg"}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}

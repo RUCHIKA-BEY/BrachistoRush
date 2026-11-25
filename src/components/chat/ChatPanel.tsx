@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { motion } from "motion/react";
-import { ArrowUp, RotateCcw, Square, X } from "lucide-react";
+import { ArrowUp, RotateCcw, Square, Volume2, X } from "lucide-react";
 import type { ChatEvent } from "@/app/api/chat/route";
 import type { TutorLevel } from "@/lib/tutor/knowledge";
-import { getLabSnapshot } from "@/lib/tutor/bridge";
+import { getLabSnapshot, takeSpeakNext } from "@/lib/tutor/bridge";
+import { canSpeak, plainForSpeech, speak, stopSpeaking } from "@/lib/voice";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { CycloMark } from "./CycloMark";
 
@@ -53,6 +54,9 @@ export default function ChatPanel({ onClose, pending, clearPending }: { onClose:
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [hydrated, setHydrated] = useState(false);
 
+  // stop reading aloud when the tutor closes
+  useEffect(() => () => stopSpeaking(), []);
+
   useEffect(() => {
     const s = load();
     setMessages(s.messages);
@@ -83,6 +87,7 @@ export default function ChatPanel({ onClose, pending, clearPending }: { onClose:
       const history: Msg[] = [...messages.filter((m) => !m.error), { role: "user", content: q }];
       setMessages([...history, { role: "assistant", content: "" }]);
       setBusy(true);
+      const readAloud = takeSpeakNext();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
       let acc = "";
@@ -142,6 +147,7 @@ export default function ChatPanel({ onClose, pending, clearPending }: { onClose:
           }
         }
         setReply(acc || "Hmm, I didn't get an answer. Please try again.", !acc);
+        if (readAloud && acc) speak(plainForSpeech(acc));
       } catch {
         if (ctrl.signal.aborted) setReply(acc ? `${acc}\n\n_(stopped)_` : "_(stopped)_", !acc);
         else setReply("Connection problem — please check your internet and try again.", true);
@@ -258,7 +264,19 @@ export default function ChatPanel({ onClose, pending, clearPending }: { onClose:
               <CycloMark className="mt-0.5 h-7 w-7 shrink-0" />
               <div className={`min-w-0 flex-1 text-sm leading-relaxed ${m.error ? "text-friction" : "text-fg-2"}`}>
                 {m.content ? (
-                  <ChatMarkdown text={m.content} onNavigate={() => window.innerWidth < 640 && onClose()} />
+                  <>
+                    <ChatMarkdown text={m.content} onNavigate={() => window.innerWidth < 640 && onClose()} />
+                    {!m.error && canSpeak() && !(busy && i === messages.length - 1) && (
+                      <button
+                        type="button"
+                        onClick={() => speak(plainForSpeech(m.content))}
+                        className="mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold text-muted hover:bg-surface-soft hover:text-fg"
+                        aria-label="Read this answer aloud"
+                      >
+                        <Volume2 className="h-3.5 w-3.5" /> Read aloud
+                      </button>
+                    )}
+                  </>
                 ) : (
                   <span className="inline-flex items-center gap-1 py-2" aria-label="Cyclo is thinking">
                     {[0, 1, 2].map((d) => (

@@ -94,7 +94,7 @@ export function LooseBall({ ball, selected }: { ball: BallObj; selected: boolean
     return () => void sceneRefs.balls.delete(ball.id);
   }, [ball.id]);
   return (
-    <group ref={group} position={[ball.x, r, ball.z]} onPointerDown={(e) => startMove(e, ball.id, ball.x, ball.z)}>
+    <group ref={group} position={[ball.x, r, ball.z]} userData={{ ballId: ball.id }} onPointerDown={(e) => startMove(e, ball.id, ball.x, ball.z)}>
       <BallMesh kind={ball.kind} selected={selected} />
     </group>
   );

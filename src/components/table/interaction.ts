@@ -13,7 +13,7 @@ export type Drag =
 export const pointer = {
   drag: null as Drag | null,
   /** ghost position while placing a new part */
-  ghost: { x: 0, z: 0, over: false },
+  ghost: { x: 0, z: 0, over: false, trackId: null as string | null },
   controls: null as { enabled: boolean } | null,
   /** time of the last placement, so the same click does not also deselect it */
   placedAt: 0,
@@ -48,7 +48,8 @@ export function startMove(e: ThreeEvent<PointerEvent>, id: string, x: number, z:
   if (st.placing) return;
   e.stopPropagation();
   st.select(id);
-  if (!canEdit()) return;
+  // race mode keeps every part in its lane: tapping only selects
+  if (!canEdit() || st.mode === "race") return;
   const p = rayToTable(e.ray);
   if (!p) return;
   lockCamera();
@@ -57,7 +58,7 @@ export function startMove(e: ThreeEvent<PointerEvent>, id: string, x: number, z:
 }
 
 export function startRotate(e: ThreeEvent<PointerEvent>, id: string, x: number, z: number, rot: number) {
-  if (e.button !== 0 || !canEdit()) return;
+  if (e.button !== 0 || !canEdit() || useLab.getState().mode === "race") return;
   e.stopPropagation();
   const p = rayToTable(e.ray);
   if (!p) return;
@@ -73,6 +74,30 @@ export function startHandle(e: ThreeEvent<PointerEvent>, t: TrackObj, index: num
   // keep the vertical frame fixed while dragging so the handle tracks the cursor exactly
   pointer.drag = { kind: "handle", id: t.id, index, top: frameOf(trackPath(t), t.W).top };
   useLab.getState().setDragging(true);
+}
+
+function shown(o: THREE.Object3D | null): boolean {
+  for (let q = o; q; q = q.parent) if (!q.visible) return false;
+  return true;
+}
+
+/**
+ * The track under the pointer, found by ray-casting the real 3D parts (boards, rails, balls),
+ * so a ball dropped on top of a track goes into THAT track, not onto the table behind it.
+ */
+export function trackUnderRay(raycaster: THREE.Raycaster, scene: THREE.Object3D, ignoreBall?: string): string | null {
+  const hits = raycaster.intersectObjects(scene.children, true);
+  outer: for (const h of hits) {
+    if (!shown(h.object) || h.object.userData.ghost) continue;
+    for (let q: THREE.Object3D | null = h.object; q; q = q.parent) if (ignoreBall && q.userData.ballId === ignoreBall) continue outer;
+    for (let q: THREE.Object3D | null = h.object; q; q = q.parent) {
+      if (typeof q.userData.trackId === "string") return q.userData.trackId;
+    }
+    // the first solid thing hit that is not part of a track (table, stopwatch) blocks the ray
+    if (!(h.object as THREE.Mesh).isMesh) continue;
+    return null;
+  }
+  return null;
 }
 
 if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") (window as unknown as { __pointer: typeof pointer }).__pointer = pointer;

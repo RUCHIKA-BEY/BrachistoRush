@@ -95,7 +95,7 @@ export function TrackModel({ t, balls, colors, selected, selectedId }: { t: Trac
   );
 
   return (
-    <group position={[t.x, 0, t.z]} rotation={[0, t.rot, 0]}>
+    <group position={[t.x, 0, t.z]} rotation={[0, t.rot, 0]} userData={{ trackId: t.id }}>
       <group
         onPointerDown={(e) => startMove(e, t.id, t.x, t.z)}
         onPointerOver={() => (document.body.style.cursor = status === "idle" || status === "finished" ? "grab" : "pointer")}
