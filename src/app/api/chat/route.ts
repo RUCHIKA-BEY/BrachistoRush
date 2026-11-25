@@ -1,11 +1,16 @@
-import { ApiError, GoogleGenAI, type Content } from "@google/genai";
+import { ApiError, GoogleGenAI, ThinkingLevel, type Content } from "@google/genai";
 import { LEVEL_NOTES, TUTOR_SYSTEM_PROMPT, type TutorLevel } from "@/lib/tutor/knowledge";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** Override with GEMINI_MODEL in .env.local if Google renames or retires this model. */
-const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+// gemini-3.6-flash: tested Nov 2026 as the fastest reliable option (3.8-flash was overloaded; 2.5-flash is retired).
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
+/** Tried in order when the main model is overloaded, rate-limited or missing (before any text is sent). */
+const FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-3.1-flash-lite"].filter((m) => m !== MODEL);
+const RETRYABLE = new Set([404, 429, 500, 503]);
+const TIMEOUT_MS = 120_000; // give up on a hung request instead of leaving the student waiting
 const MAX_TURNS = 24; // messages kept from the end of the conversation
 const MAX_CHARS = 2000; // per user message
 const MAX_OUTPUT_TOKENS = 8192;
@@ -48,7 +53,8 @@ const PAGE_NAMES: Record<string, string> = {
   "/": "the home page",
   "/cycloid": "the 'What is a Cycloid?' page",
   "/problem": "the 'Brachistochrone Problem' page",
-  "/lab": "the Race Lab",
+  "/lab": "the 3D Lab Table (the main Race Lab)",
+  "/lab/classic": "the Classic Race Lab (2D measuring lab)",
   "/why": "the 'Why the Cycloid Wins' page",
   "/explore": "the 'Explore Further' page",
   "/challenges": "the 'Challenges & Quizzes' page",
@@ -112,6 +118,8 @@ export async function POST(req: Request) {
   }));
 
   const ai = new GoogleGenAI({ apiKey });
+  const timeout = AbortSignal.timeout(TIMEOUT_MS);
+  const signal = AbortSignal.any([req.signal, timeout]);
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -121,15 +129,32 @@ export async function POST(req: Request) {
       let finish: string | null = null;
       let blocked = false;
       try {
-        const response = await ai.models.generateContentStream({
-          model: MODEL,
-          contents,
-          config: {
-            systemInstruction,
-            maxOutputTokens: MAX_OUTPUT_TOKENS,
-            abortSignal: req.signal,
-          },
-        });
+        const open = (model: string) =>
+          ai.models.generateContentStream({
+            model,
+            contents,
+            config: {
+              systemInstruction,
+              maxOutputTokens: MAX_OUTPUT_TOKENS,
+              // less silent "thinking" = the first words appear sooner; experts get more for derivations
+              thinkingConfig: { thinkingLevel: level === "expert" ? ThinkingLevel.MEDIUM : ThinkingLevel.LOW },
+              abortSignal: signal,
+            },
+          });
+        // The first request fails fast when a model is busy, so fall back before streaming starts.
+        let response: Awaited<ReturnType<typeof open>> | undefined;
+        let lastErr: unknown;
+        for (const model of [MODEL, ...FALLBACK_MODELS]) {
+          try {
+            response = await open(model);
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (signal.aborted || !(err instanceof ApiError && RETRYABLE.has(err.status))) throw err;
+            console.warn(`tutor: ${model} unavailable (${err.status}), trying next model`);
+          }
+        }
+        if (!response) throw lastErr;
         for await (const chunk of response) {
           if (chunk.promptFeedback?.blockReason) blocked = true;
           const text = chunk.text;
@@ -150,7 +175,8 @@ export async function POST(req: Request) {
         }
         send({ t: "done", stop: finish });
       } catch (err) {
-        if (!req.signal.aborted) send({ t: "error", v: friendlyError(err) });
+        if (req.signal.aborted) return; // the student closed the chat or pressed stop
+        send({ t: "error", v: timeout.aborted ? "The tutor is taking too long right now. Please try again in a moment." : friendlyError(err) });
       } finally {
         try {
           controller.close();

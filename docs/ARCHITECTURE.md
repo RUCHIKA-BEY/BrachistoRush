@@ -22,7 +22,8 @@
 /                Home — hero race, learning-path map, key ideas
 /cycloid         1 · What is a Cycloid?           rolling-circle generator
 /problem         2 · The Brachistochrone Problem   1696 challenge, timeline (Galileo → Bernoulli → Newton …)
-/lab             3 · Race Lab                      main playground (Predict → Race → Measure → Explain → Vary)
+/lab             3 · Race Lab — 3D Lab Table       main playground: build & race on a virtual table (see LAB_TABLE_3D.md)
+/lab/classic     3 · Classic Race Lab              precise 2D measuring lab (Predict → Race → Measure → Explain → Vary)
 /why             4 · Why the Cycloid Wins          speed-early intuition, energy, Snell's-law analogy, calculus of variations
 /explore         5 · Explore Further               friction, rolling balls, other planets, tautochrone
 /challenges      6 · Challenges & Quizzes          beat-the-cycloid drawing challenge, quizzes, badges

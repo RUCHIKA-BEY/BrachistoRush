@@ -22,6 +22,8 @@ export interface PathGeometry {
 export interface SimParams {
   g: number;
   mu: number;
+  /** I/(m r²) for a rolling object: 0 = sliding bead, 2/5 = solid ball, 2/3 = hollow ball. */
+  inertia?: number;
 }
 
 export type SimStatus = "finished" | "stalled" | "timeout";

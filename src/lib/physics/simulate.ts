@@ -23,7 +23,12 @@ function lookup(p: PathGeometry, s: number) {
  *   normal force / m:  N = v²κ − g·T_x
  *   tangential accel:  a = g·T_y − μ|N|·sign(v)
  */
-function accel(p: PathGeometry, s: number, v: number, g: number, mu: number): number {
+function accel(p: PathGeometry, s: number, v: number, g: number, mu: number, k = 0): number {
+  return slideAccel(p, s, v, g, mu) / (1 + k);
+}
+
+/** Tangential force per unit mass; rolling objects divide it by 1 + I/(m r²). */
+function slideAccel(p: PathGeometry, s: number, v: number, g: number, mu: number): number {
   const q = lookup(p, s);
   const drive = g * q.ty;
   if (mu === 0) return drive;
@@ -39,6 +44,7 @@ function accel(p: PathGeometry, s: number, v: number, g: number, mu: number): nu
 
 export function simulate(p: PathGeometry, params: SimParams, DT = DEFAULT_DT): SimResult {
   const { g, mu } = params;
+  const k = params.inertia ?? 0;
   const sArr: number[] = [0];
   const vArr: number[] = [0];
   let s = 0;
@@ -51,13 +57,13 @@ export function simulate(p: PathGeometry, params: SimParams, DT = DEFAULT_DT): S
 
   while (t < T_MAX) {
     // RK4 on (s, v)
-    const a1 = accel(p, s, v, g, mu);
+    const a1 = accel(p, s, v, g, mu, k);
     const k1s = v;
-    const a2 = accel(p, s + (k1s * DT) / 2, v + (a1 * DT) / 2, g, mu);
+    const a2 = accel(p, s + (k1s * DT) / 2, v + (a1 * DT) / 2, g, mu, k);
     const k2s = v + (a1 * DT) / 2;
-    const a3 = accel(p, s + (k2s * DT) / 2, v + (a2 * DT) / 2, g, mu);
+    const a3 = accel(p, s + (k2s * DT) / 2, v + (a2 * DT) / 2, g, mu, k);
     const k3s = v + (a2 * DT) / 2;
-    const a4 = accel(p, s + k3s * DT, v + a3 * DT, g, mu);
+    const a4 = accel(p, s + k3s * DT, v + a3 * DT, g, mu, k);
     const k4s = v + a3 * DT;
     let ns = s + (DT / 6) * (k1s + 2 * k2s + 2 * k3s + k4s);
     let nv = v + (DT / 6) * (a1 + 2 * a2 + 2 * a3 + a4);
@@ -90,7 +96,7 @@ export function simulate(p: PathGeometry, params: SimParams, DT = DEFAULT_DT): S
     v = nv;
     t += DT;
 
-    if (Math.abs(v) < 1e-5 && accel(p, s, 0, g, mu) === 0) {
+    if (Math.abs(v) < 1e-5 && accel(p, s, 0, g, mu, k) === 0) {
       stillFor += DT;
       if (stillFor > 0.05) {
         status = "stalled";

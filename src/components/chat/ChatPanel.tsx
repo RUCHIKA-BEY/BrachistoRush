@@ -100,7 +100,7 @@ export default function ChatPanel({ onClose, pending, clearPending }: { onClose:
             messages: history.map(({ role, content }) => ({ role, content })),
             level,
             page: pathname,
-            labState: pathname === "/lab" ? getLabSnapshot() : "",
+            labState: pathname?.startsWith("/lab") ? getLabSnapshot() : "",
           }),
           signal: ctrl.signal,
         });
