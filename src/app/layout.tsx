@@ -30,7 +30,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
       </head>
-      <body className="min-h-dvh font-sans">
+      {/* browser extensions such as Grammarly add attributes to <body> before React loads */}
+      <body className="min-h-dvh font-sans" suppressHydrationWarning>
         <AppProviders>
           <Navbar />
           <main id="main" className="min-h-[70vh]">
